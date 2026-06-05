@@ -55,13 +55,48 @@ jobs:
           const source = fs.readFileSync(path, 'utf8');
           const eol = source.includes('\r\n') ? '\r\n' : '\n';
           const normalized = source.replace(/\r\n/g, '\n');
+          const clangNeedle = [
+            "      'msvs_settings': {",
+            "        'VCCLCompilerTool': {",
+            "          'AdditionalOptions': [",
+            "            '/std:c++20',",
+            "          ],",
+            "        },",
+            "      },",
+            "      'conditions': ["
+          ].join('\n');
+          const clangReplacement = [
+            "      'msvs_settings': {",
+            "        'VCCLCompilerTool': {",
+            "          'AdditionalOptions': [",
+            "            '/std:c++20',",
+            "          ],",
+            "        },",
+            "      },",
+            "      'configurations': {",
+            "        'Debug': {",
+            "          'msbuild_toolset': 'ClangCL',",
+            "        },",
+            "        'Release': {",
+            "          'msbuild_toolset': 'ClangCL',",
+            "        },",
+            "      },",
+            "      'conditions': ["
+          ].join('\n');
+          let updated = normalized;
+          if (!updated.includes("'msbuild_toolset': 'ClangCL'")) {
+            if (!updated.includes(clangNeedle)) {
+              throw new Error('Expected better_sqlite3 compiler block not found in binding.gyp');
+            }
+            updated = updated.replace(clangNeedle, clangReplacement);
+          }
           const pattern = /,\s*\{\s*'target_name': 'test_extension'[\s\S]*?\n\s*\},\n(?=\s*\],\n\s*\})/m;
-          if (!pattern.test(normalized)) {
+          if (!pattern.test(updated)) {
             throw new Error('Expected test_extension target not found in binding.gyp');
           }
-          const updated = normalized.replace(pattern, '\n').replace(/\n/g, eol);
+          updated = updated.replace(pattern, '\n').replace(/\n/g, eol);
           fs.writeFileSync(path, updated);
-          console.log('Removed test_extension target from CI prebuild');
+          console.log('Removed test_extension target and enabled ClangCL for better_sqlite3');
           '@
           node -e $script
       - name: Clean previous build outputs
@@ -76,6 +111,7 @@ jobs:
           npm --version
           python --version
           node -p "require('./node_modules/node-gyp/package.json').version"
+          clang-cl --version
       - name: Build Windows Electron 42 prebuild
         shell: pwsh
         env:
