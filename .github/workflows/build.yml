@@ -7,13 +7,6 @@ on:
   release:
     types:
       - released
-  workflow_dispatch:
-    inputs:
-      experimental-windows-electron42:
-        description: Attempt Electron 42 Windows prebuilds with clang-cl and ninja
-        required: false
-        default: true
-        type: boolean
 
 env:
   ELECTRON_BUILD_CMD_RELEASE: npx --no-install prebuild -r electron -t 42.1.0 --include-regex 'better_sqlite3.node$'
@@ -108,7 +101,7 @@ jobs:
           if-no-files-found: error
 
   prebuild-windows-electron42:
-    if: ${{ github.event_name == 'release' || inputs['experimental-windows-electron42'] }}
+    if: ${{ github.event_name == 'release' }}
     # Keep release publishing unblocked until the Electron 42 Windows path is verified in CI.
     continue-on-error: ${{ github.event_name == 'release' }}
     strategy:
@@ -216,12 +209,6 @@ jobs:
         if: ${{ steps.inspect_windows_electron42.outputs.has_prebuilds != 'true' }}
         shell: pwsh
         run: Write-Host "Electron 42 Windows prebuilds were not produced on this run."
-      - name: Fail manual probe when Electron 42 assets are missing
-        if: ${{ github.event_name != 'release' && steps.inspect_windows_electron42.outputs.has_prebuilds != 'true' }}
-        shell: pwsh
-        run: |
-          Write-Error "Electron 42 Windows prebuilds were not produced. Inspect the diagnostics artifact from this run."
-
   upload-release-assets:
     if: >-
       ${{
