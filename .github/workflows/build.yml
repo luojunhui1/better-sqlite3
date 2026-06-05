@@ -10,10 +10,8 @@ on:
 
 env:
   # Electron 42.1.0 maps to ABI v146. Build only the Windows release assets we care about.
-  # `node-ninja` generates an MSBuild solution that delegates compilation to ninja/clang-cl.
-  ELECTRON_BUILD_CMD_RELEASE_WINDOWS: npx --no-install prebuild -r electron -t 42.1.0 --backend node-ninja --format msvs-ninja --include-regex 'better_sqlite3.node$' --verbose
-  PYTHON2_DIR: C:\Python27
-  PYTHON2_EXE: C:\Python27\python.exe
+  # Use the modern `node-gyp` backend already bundled in devDependencies.
+  ELECTRON_BUILD_CMD_RELEASE_WINDOWS: npx --no-install prebuild -r electron -t 42.1.0 --backend node-gyp --include-regex 'better_sqlite3.node$' --verbose
 
 jobs:
   prebuild-windows:
@@ -38,285 +36,32 @@ jobs:
       - uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: ${{ matrix.msvc_arch }}
-      - name: Export Visual Studio 2022 override for node-ninja
+      - name: Export Visual Studio 2022 settings
         shell: pwsh
         run: |
-          $vsPath = $env:VSINSTALLDIR.TrimEnd('\')
+          $python = (Get-Command python).Source
+          "npm_config_msvs_version=2022" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "GYP_MSVS_VERSION=2022" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          "GYP_MSVS_OVERRIDE_PATH=$vsPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          Write-Host "Using Visual Studio override path: $vsPath"
-      - name: Prepare Windows toolchain PATH
-        shell: pwsh
-        run: |
-          $llvmBin = Join-Path ${env:ProgramFiles} 'LLVM\bin'
-          if ((Test-Path (Join-Path $llvmBin 'clang-cl.exe')) -and -not (Get-Command clang-cl -ErrorAction SilentlyContinue)) {
-            $llvmBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-            Write-Host "Added LLVM to PATH: $llvmBin"
-          }
-          if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) {
-            $ninja = Get-ChildItem -Path ${env:ProgramFiles}, ${env:ProgramData} -Filter ninja.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($ninja) {
-              Split-Path $ninja.FullName -Parent | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-              Write-Host "Added Ninja to PATH: $($ninja.FullName)"
-            }
-          }
-      - run: pip.exe install setuptools
-      - name: Install Python 2.7 for node-ninja
-        shell: pwsh
-        run: |
-          $pythonExe = "${{ env.PYTHON2_EXE }}"
-          if (-not (Test-Path $pythonExe)) {
-            $installer = Join-Path $env:RUNNER_TEMP 'python-2.7.18.amd64.msi'
-            Invoke-WebRequest 'https://www.python.org/ftp/python/2.7.18/python-2.7.18.amd64.msi' -OutFile $installer
-            Start-Process msiexec.exe -Wait -NoNewWindow -ArgumentList @(
-              '/i', $installer,
-              '/qn',
-              'TARGETDIR=C:\Python27',
-              'ALLUSERS=1'
-            )
-          }
-          "${{ env.PYTHON2_DIR }}" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          "${{ env.PYTHON2_DIR }}\Scripts" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          "PYTHON=${{ env.PYTHON2_EXE }}" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          "npm_config_python=${{ env.PYTHON2_EXE }}" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          & $pythonExe -V
+          "PYTHON=$python" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "npm_config_python=$python" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "Using Python: $python"
       - run: npm install --ignore-scripts
-      - name: Patch node-ninja for Visual Studio 2022
+      - name: Disable test_extension target for prebuild release
         shell: pwsh
         run: |
           $script = @'
           const fs = require('fs');
-
-          function replaceOrThrow(source, searchValue, replaceValue, label) {
-            if (typeof searchValue === 'string') {
-              if (!source.includes(searchValue)) {
-                throw new Error(`Expected ${label} snippet not found`);
-              }
-              return source.replace(searchValue, replaceValue);
-            }
-            if (!searchValue.test(source)) {
-              throw new Error(`Expected ${label} pattern not found`);
-            }
-            return source.replace(searchValue, replaceValue);
-          }
-
-          const msvsVersionPath = 'node_modules/node-ninja/gyp/pylib/gyp/MSVSVersion.py';
-          let source = fs.readFileSync(msvsVersionPath, 'utf8');
-
-          if (!source.includes("'2022': VisualStudioVersion('2022'")) {
-            source = source.replace(
-              "  versions = {\n      '2015': VisualStudioVersion('2015',",
-              "  versions = {\n      '2022': VisualStudioVersion('2022',\n                                  'Visual Studio 2022',\n                                  solution_version='12.00',\n                                  project_version='17.0',\n                                  flat_sln=False,\n                                  uses_vcxproj=True,\n                                  path=path,\n                                  sdk_based=sdk_based,\n                                  default_toolset='v143'),\n      '2015': VisualStudioVersion('2015',"
-            );
-          }
-
-          if (!source.includes("      '17.0': '2022',")) {
-            source = source.replace(
-              "  version_to_year = {\n      '8.0': '2005',",
-              "  version_to_year = {\n      '17.0': '2022',\n      '8.0': '2005',"
-            );
-          }
-
-          if (!source.includes("    '2022': ('17.0',),")) {
-            source = source.replace(
-              "  version_map = {\n    'auto': ('14.0', '12.0', '10.0', '9.0', '8.0', '11.0'),",
-              "  version_map = {\n    'auto': ('17.0', '14.0', '12.0', '10.0', '9.0', '8.0', '11.0'),"
-            );
-            source = source.replace(
-              "    '2015': ('14.0',),",
-              "    '2015': ('14.0',),\n    '2022': ('17.0',),"
-            );
-          }
-
-          const setupScriptNeedle = "    assert target_arch in ('x86', 'x64')\n    sdk_dir = os.environ.get('WindowsSDKDir')";
-          if (source.includes(setupScriptNeedle) && !source.includes("VC/Auxiliary/Build/vcvarsall.bat")) {
-            source = source.replace(
-              setupScriptNeedle,
-              "    assert target_arch in ('x86', 'x64')\n    if self.short_name >= '2017':\n      script_path = os.path.normpath(\n          os.path.join(self.path, 'VC/Auxiliary/Build/vcvarsall.bat'))\n      is_host_arch_x64 = (\n          os.environ.get('PROCESSOR_ARCHITECTURE') == 'AMD64' or\n          os.environ.get('PROCESSOR_ARCHITEW6432') == 'AMD64')\n      host_arch = 'amd64' if is_host_arch_x64 else 'x86'\n      msvc_target_arch = 'amd64' if target_arch == 'x64' else 'x86'\n      arg = host_arch\n      if host_arch != msvc_target_arch:\n        arg += '_' + msvc_target_arch\n      return [script_path, arg]\n    sdk_dir = os.environ.get('WindowsSDKDir')"
-            );
-          }
-
-          fs.writeFileSync(msvsVersionPath, source);
-
-          const configureJsPath = 'node_modules/node-ninja/lib/configure.js';
-          let configureJs = fs.readFileSync(configureJsPath, 'utf8');
-          if (!configureJs.includes('function parseConfigGypi (config) {')) {
-            configureJs = replaceOrThrow(
-              configureJs,
-              "function configure (gyp, argv, callback) {\n",
-              "function parseConfigGypi (config) {\n  config = config.replace(/#.*/g, '')\n  config = config.replace(/'$\\s+'/mg, '')\n  config = config.replace(/'/g, '\"')\n  return JSON.parse(config)\n}\n\nfunction configure (gyp, argv, callback) {\n",
-              'configure.js helper insertion'
-            );
-          }
-
-          configureJs = replaceOrThrow(
-            configureJs,
-            "    var config = process.config || {}\n      , defaults = config.target_defaults\n      , variables = config.variables\n",
-            "    var config = {}\n    var useCustomHeaders = gyp.opts.nodedir || gyp.opts.disturl || gyp.opts['dist-url']\n    if (useCustomHeaders && !gyp.opts['force-process-config']) {\n      var baseConfigPath = path.resolve(nodeDir, 'include/node/config.gypi')\n      try {\n        config = parseConfigGypi(fs.readFileSync(baseConfigPath, 'utf8'))\n        log.verbose('build/' + configFilename, 'using headers config.gypi: %s', baseConfigPath)\n      } catch (err) {\n        log.warn('read config.gypi', err.message)\n      }\n    }\n    if (!Object.keys(config).length) {\n      config = JSON.parse(JSON.stringify(process.config || {}))\n    }\n    var defaults = config.target_defaults\n      , variables = config.variables\n",
-            'configure.js config.gypi source'
-          );
-
-          configureJs = replaceOrThrow(
-            configureJs,
-            "    // set the node development directory\n    variables.nodedir = nodeDir\n\n    // don't copy dev libraries with nodedir option\n    variables.copy_dev_lib = !gyp.opts.nodedir\n\n    // disable -T \"thin\" static archives by default\n    variables.standalone_static_library = gyp.opts.thin ? 0 : 1\n",
-            "    // set the node development directory\n    variables.nodedir = nodeDir\n\n    // record the configured Python executable for downstream gyp logic\n    variables.python = python\n\n    // don't copy dev libraries with nodedir option\n    variables.copy_dev_lib = !gyp.opts.nodedir\n\n    if (win && variables.target_arch === 'arm64') {\n      defaults.msvs_configuration_platform = 'ARM64'\n    }\n\n    // disable -T \"thin\" static archives by default\n    variables.standalone_static_library = gyp.opts.thin ? 0 : 1\n",
-            'configure.js variable injection'
-          );
-          fs.writeFileSync(configureJsPath, configureJs);
-
-          const installJsPath = 'node_modules/node-ninja/lib/install.js';
-          let installJs = fs.readFileSync(installJsPath, 'utf8');
-          installJs = replaceOrThrow(
-            installJs,
-            /      function downloadNodeLib \(done\) \{[\s\S]*?      \} \/\/ downloadNodeLib\(\)\n/,
-            [
-              "      function downloadNodeLib (done) {",
-              "        log.verbose('on Windows; need to download `' + release.name + '.lib`...')",
-              "        var downloads = [",
-              "          { dir: 'ia32', url: release.libUrl32, checksumKey: release.libPath32, label: '32-bit' },",
-              "          { dir: 'x64', url: release.libUrl64, checksumKey: release.libPath64, label: '64-bit' }",
-              "        ]",
-              "",
-              "        if (gyp.opts.arch === 'arm64') {",
-              "          downloads.push({",
-              "            dir: 'arm64',",
-              "            url: release.baseUrl.replace(/\\/+$/, '/') + 'win-arm64/' + release.name + '.lib',",
-              "            checksumKey: 'win-arm64/' + release.name + '.lib',",
-              "            label: 'arm64'",
-              "          })",
-              "        }",
-              "",
-              "        var async = downloads.length",
-              "        downloads.forEach(function (item) {",
-              "          var dir = path.resolve(devDir, item.dir)",
-              "          var libPath = path.resolve(dir, release.name + '.lib')",
-              "",
-              "          log.verbose(item.label + ' ' + release.name + '.lib dir', dir)",
-              "          log.verbose('`' + release.name + '.lib` ' + item.label + ' url', item.url)",
-              "",
-              "          mkdir(dir, function (err) {",
-              "            if (err) return done(err)",
-              "            log.verbose('streaming ' + item.label + ' ' + release.name + '.lib to:', libPath)",
-              "",
-              "            try {",
-              "              var req = download(gyp, process.env, item.url, cb)",
-              "            } catch (e) {",
-              "              return cb(e)",
-              "            }",
-              "",
-              "            req.on('error', done)",
-              "            req.on('response', function (res) {",
-              "              if (res.statusCode !== 200) {",
-              "                done(new Error(res.statusCode + ' status code downloading ' + item.label + ' ' + release.name + '.lib'))",
-              "                return",
-              "              }",
-              "",
-              "              getContentSha(res, function (_, checksum) {",
-              "                contentShasums[item.checksumKey] = checksum",
-              "                log.verbose('content checksum', item.checksumKey, checksum)",
-              "              })",
-              "",
-              "              var ws = fs.createWriteStream(libPath)",
-              "              ws.on('error', cb)",
-              "              req.pipe(ws)",
-              "            })",
-              "            req.on('end', function () {",
-              "              --async || done()",
-              "            })",
-              "          })",
-              "        })",
-              "      } // downloadNodeLib()",
-              ""
-            ].join('\n'),
-            'install.js node.lib download patch'
-          );
-          fs.writeFileSync(installJsPath, installJs);
-
-          const addonGypiPath = 'node_modules/node-ninja/addon.gypi';
-          let addonGypi = fs.readFileSync(addonGypiPath, 'utf8');
-          if (!addonGypi.includes("'standalone_static_library%': 1")) {
-            addonGypi = addonGypi.replace(
-              "{\n  'target_defaults': {",
-              "{\n  'variables': {\n    'standalone_static_library%': 1,\n  },\n  'target_defaults': {"
-            );
-          }
-          addonGypi = addonGypi.replace(
-            "      ['_win_delay_load_hook==\"true\"', {",
-            "      ['_win_delay_load_hook==\"true\" and _type==\"loadable_module\"', {"
-          );
-          fs.writeFileSync(addonGypiPath, addonGypi);
-
-          const delayHookPath = 'node_modules/node-ninja/src/win_delay_load_hook.c';
-          let delayHook = fs.readFileSync(delayHookPath, 'utf8');
-          delayHook = delayHook.replace(
-            'PfnDliHook __pfnDliNotifyHook2 = load_exe_hook;',
-            'const PfnDliHook __pfnDliNotifyHook2 = load_exe_hook;'
-          );
-          fs.writeFileSync(delayHookPath, delayHook);
-
-          const buildJsPath = 'node_modules/node-ninja/lib/build.js';
-          let buildJs = fs.readFileSync(buildJsPath, 'utf8');
-          buildJs = replaceOrThrow(
-            buildJs,
-            "    var buildDir = path.resolve(nodeDir, buildType)\n      , archNodeLibPath = path.resolve(nodeDir, arch, release.name + '.lib')\n      , buildNodeLibPath = path.resolve(buildDir, release.name + '.lib')\n\n    mkdirp(buildDir, function (err, isNew) {\n      if (err) return callback(err)\n      log.verbose('\"' + buildType + '\" dir needed to be created?', isNew)\n      var rs = fs.createReadStream(archNodeLibPath)\n        , ws = fs.createWriteStream(buildNodeLibPath)\n      log.verbose('copying \"' + release.name + '.lib\" for ' + arch, buildNodeLibPath)\n      rs.pipe(ws)\n      rs.on('error', callback)\n      ws.on('error', callback)\n      rs.on('end', doBuild)\n    })\n",
-            "    var buildDir = path.resolve(nodeDir, buildType)\n      , archNodeLibPath = path.resolve(nodeDir, arch, release.name + '.lib')\n      , buildNodeLibPath = path.resolve(buildDir, release.name + '.lib')\n\n    mkdirp(buildDir, function (err, isNew) {\n      if (err) return callback(err)\n      log.verbose('\"' + buildType + '\" dir needed to be created?', isNew)\n      var completed = false\n      function finishCopy (err) {\n        if (completed) return\n        completed = true\n        if (err) return callback(err)\n        doBuild()\n      }\n      var rs = fs.createReadStream(archNodeLibPath)\n        , ws = fs.createWriteStream(buildNodeLibPath)\n      log.verbose('copying \"' + release.name + '.lib\" for ' + arch, buildNodeLibPath)\n      rs.on('error', finishCopy)\n      ws.on('error', finishCopy)\n      ws.on('close', finishCopy)\n      rs.pipe(ws)\n    })\n",
-            'build.js copyNodeLib patch'
-          );
-          buildJs = replaceOrThrow(
-            buildJs,
-            "      var p = arch === 'x64' ? 'x64' : 'Win32'\n",
-            "      var p = arch === 'x64' ? 'x64' : (arch === 'arm64' ? 'ARM64' : 'Win32')\n",
-            'build.js platform mapping'
-          );
-          const buildNeedle = "  function doBuild () {\n\n    // Enable Verbose build";
-          if (buildJs.includes(buildNeedle) && !buildJs.includes("argv = argv.filter(function (arg, index) {")) {
-            buildJs = buildJs.replace(
-              buildNeedle,
-              "  function doBuild () {\n\n    if (win) {\n      argv = argv.filter(function (arg, index) {\n        return arg !== '--format' && argv[index - 1] !== '--format'\n      })\n    }\n\n    // Enable Verbose build"
-            );
-          }
-          fs.writeFileSync(buildJsPath, buildJs);
-
-          console.log('Patched node-ninja for Visual Studio 2022, Electron headers config.gypi, node.lib handling, delay-load hook, standalone_static_library, and msbuild args');
-          '@
-          node -e $script
-      - name: Patch prebuild for node-ninja
-        shell: pwsh
-        run: |
-          $script = @'
-          const fs = require('fs');
-          const path = 'node_modules/prebuild/gyp.js';
+          const path = 'binding.gyp';
           const source = fs.readFileSync(path, 'utf8');
-          const pattern = /(\s*)gyp\.commands\[command\.name\]\(command\.args\)\.then\(function \(\) \{\s*\n\s*log\.verbose\('ok'\)\s*\n\s*process\.nextTick\(runStep\)\s*\n\s*\}, function \(err\) \{\s*\n\s*log\.error\(command\.name \+ ' error'\)\s*\n\s*log\.error\('stack', err\.stack\)\s*\n\s*log\.error\('not ok'\)\s*\n\s*return cb\(err\)\s*\n\s*\}\)/m;
-          if (!pattern.test(source)) {
-            throw new Error('Expected prebuild gyp.js pattern not found');
+          const eol = source.includes('\r\n') ? '\r\n' : '\n';
+          const normalized = source.replace(/\r\n/g, '\n');
+          const pattern = /,\s*\{\s*'target_name': 'test_extension'[\s\S]*?\n\s*\},\n(?=\s*\],\n\s*\})/m;
+          if (!pattern.test(normalized)) {
+            throw new Error('Expected test_extension target not found in binding.gyp');
           }
-          const replacement = [
-            '$1var result',
-            '$1if (gyp.commands[command.name].length >= 2) {',
-            '$1  result = new Promise(function (resolve, reject) {',
-            '$1    gyp.commands[command.name](command.args, function (err) {',
-            '$1      if (err) return reject(err)',
-            '$1      resolve()',
-            '$1    })',
-            '$1  })',
-            '$1} else {',
-            '$1  result = gyp.commands[command.name](command.args)',
-            '$1}',
-            '$1',
-            '$1result.then(function () {',
-            '$1  log.verbose(\'ok\')',
-            '$1  process.nextTick(runStep)',
-            '$1}, function (err) {',
-            '$1  log.error(command.name + \' error\')',
-            '$1  log.error(\'stack\', err.stack)',
-            '$1  log.error(\'not ok\')',
-            '$1  return cb(err)',
-            '$1})'
-          ].join('\n');
-          const replaced = source.replace(pattern, replacement);
-          fs.writeFileSync(path, replaced);
-          console.log('Patched prebuild/gyp.js for callback backends');
+          const updated = normalized.replace(pattern, '\n').replace(/\n/g, eol);
+          fs.writeFileSync(path, updated);
+          console.log('Removed test_extension target from CI prebuild');
           '@
           node -e $script
       - name: Clean previous build outputs
@@ -324,31 +69,16 @@ jobs:
         run: |
           if (Test-Path build) { Remove-Item build -Recurse -Force }
           if (Test-Path prebuilds) { Remove-Item prebuilds -Recurse -Force }
-      - name: Verify Windows toolchain
-        # Keep pwsh here: bash prepends GNU paths that can shadow link.exe from MSVC.
+      - name: Verify tool versions
         shell: pwsh
         run: |
-          $clang = Get-Command clang-cl -ErrorAction SilentlyContinue
-          $ninja = Get-Command ninja -ErrorAction SilentlyContinue
-          if ($clang) {
-            Write-Host "clang-cl: $($clang.Source)"
-            clang-cl --version
-          } else {
-            Write-Host "clang-cl was not found on PATH."
-          }
-          if ($ninja) {
-            Write-Host "ninja: $($ninja.Source)"
-            ninja --version
-          } else {
-            Write-Host "ninja was not found on PATH."
-          }
+          node --version
+          npm --version
+          python --version
+          node -p "require('./node_modules/node-gyp/package.json').version"
       - name: Build Windows Electron 42 prebuild
         shell: pwsh
         env:
-          CC: clang-cl
-          CXX: clang-cl
-          CC_target: clang-cl
-          CXX_target: clang-cl
           npm_config_msvs_version: 2022
         run: |
           ${{ env.ELECTRON_BUILD_CMD_RELEASE_WINDOWS }} --arch ${{ matrix.arch }}
