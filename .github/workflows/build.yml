@@ -53,6 +53,49 @@ jobs:
           }
       - run: pip.exe install setuptools
       - run: npm install --ignore-scripts
+      - name: Patch prebuild for node-ninja
+        shell: pwsh
+        run: |
+          $script = @'
+          const fs = require('fs');
+          const path = 'node_modules/prebuild/gyp.js';
+          const source = fs.readFileSync(path, 'utf8');
+          const before = `    gyp.commands[command.name](command.args).then(function () {
+              log.verbose('ok')
+              process.nextTick(runStep)
+            }, function (err) {
+              log.error(command.name + ' error')
+              log.error('stack', err.stack)
+              log.error('not ok')
+              return cb(err)
+            })`;
+          const after = `    var result
+            if (gyp.commands[command.name].length >= 2) {
+              result = new Promise(function (resolve, reject) {
+                gyp.commands[command.name](command.args, function (err) {
+                  if (err) return reject(err)
+                  resolve()
+                })
+              })
+            } else {
+              result = gyp.commands[command.name](command.args)
+            }
+
+            result.then(function () {
+              log.verbose('ok')
+              process.nextTick(runStep)
+            }, function (err) {
+              log.error(command.name + ' error')
+              log.error('stack', err.stack)
+              log.error('not ok')
+              return cb(err)
+            })`;
+          if (!source.includes(before)) {
+            throw new Error('Expected prebuild gyp.js snippet not found');
+          }
+          fs.writeFileSync(path, source.replace(before, after));
+          '@
+          node -e $script
       - name: Clean previous build outputs
         shell: pwsh
         run: |
