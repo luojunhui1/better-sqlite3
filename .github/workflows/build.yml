@@ -7,13 +7,22 @@ on:
   release:
     types:
       - released
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      experimental-windows-electron42:
+        description: Attempt Electron 42 Windows prebuilds with clang-cl and ninja
+        required: false
+        default: true
+        type: boolean
 
 env:
   ELECTRON_BUILD_CMD_RELEASE: npx --no-install prebuild -r electron -t 42.1.0 --include-regex 'better_sqlite3.node$'
-  # Electron 42 headers require ClangCL on Windows, but node-gyp currently drives MSBuild with cl.exe.
-  # Keep Windows release assets on the last known-good modern Electron range until that toolchain path is fixed.
-  ELECTRON_BUILD_CMD_RELEASE_WINDOWS: npx --no-install prebuild -r electron -t 39.0.0 -t 40.0.0 -t 41.0.0 --include-regex 'better_sqlite3.node$'
+  # Keep the last known-good Windows release path for Electron 39/40/41 while
+  # separately probing the Electron 42 toolchain on Windows.
+  ELECTRON_BUILD_CMD_RELEASE_WINDOWS_STABLE: npx --no-install prebuild -r electron -t 39.0.0 -t 40.0.0 -t 41.0.0 --include-regex 'better_sqlite3.node$'
+  # Electron 42 pulls in Node 24 headers on Windows, which need a clang-cl based path.
+  # `node-ninja` can generate an MSBuild solution that delegates actual compilation to ninja.
+  ELECTRON_BUILD_CMD_RELEASE_WINDOWS_EXPERIMENTAL: npx --no-install prebuild -r electron -t 42.1.0 --backend node-ninja --format msvs-ninja --include-regex 'better_sqlite3.node$' --verbose
 
 jobs:
   prebuild-macos:
@@ -91,15 +100,138 @@ jobs:
           node-version: 20
       - run: pip.exe install setuptools
       - run: npm install --ignore-scripts
-      - run: ${{ env.ELECTRON_BUILD_CMD_RELEASE_WINDOWS }} --arch ${{ matrix.arch }}
+      - run: ${{ env.ELECTRON_BUILD_CMD_RELEASE_WINDOWS_STABLE }} --arch ${{ matrix.arch }}
       - uses: actions/upload-artifact@v4
         with:
           name: prebuild-windows-${{ matrix.arch }}
           path: prebuilds/*.tar.gz
           if-no-files-found: error
 
+  prebuild-windows-electron42:
+    if: ${{ github.event_name == 'release' || inputs.experimental-windows-electron42 }}
+    # Keep release publishing unblocked until the Electron 42 Windows path is verified in CI.
+    continue-on-error: ${{ github.event_name == 'release' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            msvc_arch: amd64
+          - arch: ia32
+            msvc_arch: amd64_x86
+          - arch: arm64
+            msvc_arch: amd64_arm64
+    name: Prebuild on Windows Electron 42 (${{ matrix.arch }})
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: ${{ matrix.msvc_arch }}
+      - name: Prepare Windows toolchain PATH
+        shell: pwsh
+        run: |
+          $llvmBin = Join-Path ${env:ProgramFiles} 'LLVM\bin'
+          if ((Test-Path (Join-Path $llvmBin 'clang-cl.exe')) -and -not (Get-Command clang-cl -ErrorAction SilentlyContinue)) {
+            $llvmBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+            Write-Host "Added LLVM to PATH: $llvmBin"
+          }
+          if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) {
+            $ninja = Get-ChildItem -Path ${env:ProgramFiles}, ${env:ProgramData} -Filter ninja.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($ninja) {
+              Split-Path $ninja.FullName -Parent | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+              Write-Host "Added Ninja to PATH: $($ninja.FullName)"
+            }
+          }
+      - run: pip.exe install setuptools
+      - run: npm install --ignore-scripts
+      - name: Clean previous build outputs
+        shell: pwsh
+        run: |
+          if (Test-Path build) { Remove-Item build -Recurse -Force }
+          if (Test-Path prebuilds) { Remove-Item prebuilds -Recurse -Force }
+      - name: Verify Windows toolchain
+        # Keep pwsh here: bash prepends GNU paths that can shadow link.exe from MSVC.
+        shell: pwsh
+        run: |
+          $clang = Get-Command clang-cl -ErrorAction SilentlyContinue
+          $ninja = Get-Command ninja -ErrorAction SilentlyContinue
+          if ($clang) {
+            Write-Host "clang-cl: $($clang.Source)"
+            clang-cl --version
+          } else {
+            Write-Host "clang-cl was not found on PATH."
+          }
+          if ($ninja) {
+            Write-Host "ninja: $($ninja.Source)"
+            ninja --version
+          } else {
+            Write-Host "ninja was not found on PATH."
+          }
+      - name: Attempt Electron 42 prebuild
+        continue-on-error: true
+        shell: pwsh
+        env:
+          CC: clang-cl
+          CXX: clang-cl
+          CC_target: clang-cl
+          CXX_target: clang-cl
+          npm_config_msvs_version: 2022
+        run: |
+          ${{ env.ELECTRON_BUILD_CMD_RELEASE_WINDOWS_EXPERIMENTAL }} --arch ${{ matrix.arch }}
+      - name: List produced prebuilds
+        if: always()
+        shell: pwsh
+        run: |
+          if (Test-Path prebuilds) {
+            Get-ChildItem prebuilds -File | Format-Table Name, Length
+          } else {
+            Write-Host "No prebuilds directory was produced."
+          }
+      - name: Inspect Windows Electron 42 outputs
+        if: always()
+        id: inspect_windows_electron42
+        shell: pwsh
+        run: |
+          $hasPrebuilds = [bool](Get-ChildItem prebuilds -Filter *.tar.gz -File -ErrorAction SilentlyContinue)
+          $hasBuildOutputs = Test-Path build
+          "has_prebuilds=$($hasPrebuilds.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+          "has_build_outputs=$($hasBuildOutputs.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+      - uses: actions/upload-artifact@v4
+        if: ${{ steps.inspect_windows_electron42.outputs.has_prebuilds == 'true' }}
+        with:
+          name: prebuild-windows-electron42-${{ matrix.arch }}
+          path: prebuilds/*.tar.gz
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() && steps.inspect_windows_electron42.outputs.has_build_outputs == 'true' }}
+        with:
+          name: diagnostics-windows-electron42-${{ matrix.arch }}
+          path: build/**/*
+          if-no-files-found: error
+      - name: Record missing Electron 42 Windows assets
+        if: ${{ steps.inspect_windows_electron42.outputs.has_prebuilds != 'true' }}
+        shell: pwsh
+        run: Write-Host "Electron 42 Windows prebuilds were not produced on this run."
+      - name: Fail manual probe when Electron 42 assets are missing
+        if: ${{ github.event_name != 'release' && steps.inspect_windows_electron42.outputs.has_prebuilds != 'true' }}
+        shell: pwsh
+        run: |
+          Write-Error "Electron 42 Windows prebuilds were not produced. Inspect the diagnostics artifact from this run."
+
   upload-release-assets:
-    if: ${{ github.event_name == 'release' }}
+    if: >-
+      ${{
+        github.event_name == 'release' &&
+        always() &&
+        needs.prebuild-macos.result == 'success' &&
+        needs.prebuild-linux-x64.result == 'success' &&
+        needs.prebuild-linux-arm64.result == 'success' &&
+        needs.prebuild-windows.result == 'success'
+      }}
     name: Upload release assets
     runs-on: ubuntu-latest
     permissions:
@@ -109,6 +241,7 @@ jobs:
       - prebuild-linux-x64
       - prebuild-linux-arm64
       - prebuild-windows
+      - prebuild-windows-electron42
     steps:
       - uses: actions/download-artifact@v4
         with:
