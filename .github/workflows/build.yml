@@ -108,7 +108,7 @@ jobs:
           if-no-files-found: error
 
   prebuild-windows-electron42:
-    if: ${{ github.event_name == 'release' || inputs.experimental-windows-electron42 }}
+    if: ${{ github.event_name == 'release' || inputs['experimental-windows-electron42'] }}
     # Keep release publishing unblocked until the Electron 42 Windows path is verified in CI.
     continue-on-error: ${{ github.event_name == 'release' }}
     strategy:
