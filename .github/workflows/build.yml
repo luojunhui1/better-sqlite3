@@ -12,6 +12,8 @@ env:
   # Electron 42.1.0 maps to ABI v146. Build only the Windows release assets we care about.
   # `node-ninja` generates an MSBuild solution that delegates compilation to ninja/clang-cl.
   ELECTRON_BUILD_CMD_RELEASE_WINDOWS: npx --no-install prebuild -r electron -t 42.1.0 --backend node-ninja --format msvs-ninja --include-regex 'better_sqlite3.node$' --verbose
+  PYTHON2_DIR: C:\Python27
+  PYTHON2_EXE: C:\Python27\python.exe
 
 jobs:
   prebuild-windows:
@@ -52,6 +54,25 @@ jobs:
             }
           }
       - run: pip.exe install setuptools
+      - name: Install Python 2.7 for node-ninja
+        shell: pwsh
+        run: |
+          $pythonExe = "${{ env.PYTHON2_EXE }}"
+          if (-not (Test-Path $pythonExe)) {
+            $installer = Join-Path $env:RUNNER_TEMP 'python-2.7.18.amd64.msi'
+            Invoke-WebRequest 'https://www.python.org/ftp/python/2.7.18/python-2.7.18.amd64.msi' -OutFile $installer
+            Start-Process msiexec.exe -Wait -NoNewWindow -ArgumentList @(
+              '/i', $installer,
+              '/qn',
+              'TARGETDIR=C:\Python27',
+              'ALLUSERS=1'
+            )
+          }
+          "${{ env.PYTHON2_DIR }}" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          "${{ env.PYTHON2_DIR }}\Scripts" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          "PYTHON=${{ env.PYTHON2_EXE }}" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "npm_config_python=${{ env.PYTHON2_EXE }}" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          & $pythonExe -V
       - run: npm install --ignore-scripts
       - name: Patch prebuild for node-ninja
         shell: pwsh
