@@ -134,7 +134,18 @@ jobs:
           }
           fs.writeFileSync(addonGypiPath, addonGypi);
 
-          console.log('Patched node-ninja for Visual Studio 2022 and standalone_static_library');
+          const buildJsPath = 'node_modules/node-ninja/lib/build.js';
+          let buildJs = fs.readFileSync(buildJsPath, 'utf8');
+          const buildNeedle = "  function doBuild () {\n\n    // Enable Verbose build";
+          if (buildJs.includes(buildNeedle) && !buildJs.includes("argv = argv.filter(function (arg, index) {")) {
+            buildJs = buildJs.replace(
+              buildNeedle,
+              "  function doBuild () {\n\n    if (win) {\n      argv = argv.filter(function (arg, index) {\n        return arg !== '--format' && argv[index - 1] !== '--format'\n      })\n    }\n\n    // Enable Verbose build"
+            );
+          }
+          fs.writeFileSync(buildJsPath, buildJs);
+
+          console.log('Patched node-ninja for Visual Studio 2022, standalone_static_library, and msbuild args');
           '@
           node -e $script
       - name: Patch prebuild for node-ninja
