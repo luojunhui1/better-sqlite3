@@ -82,7 +82,7 @@ jobs:
           node -e "require('./lib/index.js')(':memory:').loadExtension('mod_spatialite').exec('SELECT InitSpatialMetaData();')"
 
   publish:
-    if: ${{ github.event_name == 'release' }}
+    if: ${{ false }}
     name: Publishing to NPM
     runs-on: ubuntu-22.04
     permissions:
@@ -109,7 +109,7 @@ jobs:
       - run: npm publish --provenance
 
   prebuild:
-    if: ${{ false }}
+    if: ${{ github.event_name == 'release' }}
     strategy:
       fail-fast: false
       matrix:
