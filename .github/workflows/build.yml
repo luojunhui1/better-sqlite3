@@ -38,6 +38,13 @@ jobs:
       - uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: ${{ matrix.msvc_arch }}
+      - name: Export Visual Studio 2022 override for node-ninja
+        shell: pwsh
+        run: |
+          $vsPath = $env:VSINSTALLDIR.TrimEnd('\')
+          "GYP_MSVS_VERSION=2022" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "GYP_MSVS_OVERRIDE_PATH=$vsPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "Using Visual Studio override path: $vsPath"
       - name: Prepare Windows toolchain PATH
         shell: pwsh
         run: |
@@ -74,6 +81,51 @@ jobs:
           "npm_config_python=${{ env.PYTHON2_EXE }}" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           & $pythonExe -V
       - run: npm install --ignore-scripts
+      - name: Patch node-ninja for Visual Studio 2022
+        shell: pwsh
+        run: |
+          $script = @'
+          const fs = require('fs');
+          const path = 'node_modules/node-ninja/gyp/pylib/gyp/MSVSVersion.py';
+          let source = fs.readFileSync(path, 'utf8');
+
+          if (!source.includes("'2022': VisualStudioVersion('2022'")) {
+            source = source.replace(
+              "  versions = {\n      '2015': VisualStudioVersion('2015',",
+              "  versions = {\n      '2022': VisualStudioVersion('2022',\n                                  'Visual Studio 2022',\n                                  solution_version='12.00',\n                                  project_version='17.0',\n                                  flat_sln=False,\n                                  uses_vcxproj=True,\n                                  path=path,\n                                  sdk_based=sdk_based,\n                                  default_toolset='v143'),\n      '2015': VisualStudioVersion('2015',"
+            );
+          }
+
+          if (!source.includes("      '17.0': '2022',")) {
+            source = source.replace(
+              "  version_to_year = {\n      '8.0': '2005',",
+              "  version_to_year = {\n      '17.0': '2022',\n      '8.0': '2005',"
+            );
+          }
+
+          if (!source.includes("    '2022': ('17.0',),")) {
+            source = source.replace(
+              "  version_map = {\n    'auto': ('14.0', '12.0', '10.0', '9.0', '8.0', '11.0'),",
+              "  version_map = {\n    'auto': ('17.0', '14.0', '12.0', '10.0', '9.0', '8.0', '11.0'),"
+            );
+            source = source.replace(
+              "    '2015': ('14.0',),",
+              "    '2015': ('14.0',),\n    '2022': ('17.0',),"
+            );
+          }
+
+          const setupScriptNeedle = "    assert target_arch in ('x86', 'x64')\n    sdk_dir = os.environ.get('WindowsSDKDir')";
+          if (source.includes(setupScriptNeedle) && !source.includes("VC/Auxiliary/Build/vcvarsall.bat")) {
+            source = source.replace(
+              setupScriptNeedle,
+              "    assert target_arch in ('x86', 'x64')\n    if self.short_name >= '2017':\n      script_path = os.path.normpath(\n          os.path.join(self.path, 'VC/Auxiliary/Build/vcvarsall.bat'))\n      is_host_arch_x64 = (\n          os.environ.get('PROCESSOR_ARCHITECTURE') == 'AMD64' or\n          os.environ.get('PROCESSOR_ARCHITEW6432') == 'AMD64')\n      host_arch = 'amd64' if is_host_arch_x64 else 'x86'\n      msvc_target_arch = 'amd64' if target_arch == 'x64' else 'x86'\n      arg = host_arch\n      if host_arch != msvc_target_arch:\n        arg += '_' + msvc_target_arch\n      return [script_path, arg]\n    sdk_dir = os.environ.get('WindowsSDKDir')"
+            );
+          }
+
+          fs.writeFileSync(path, source);
+          console.log('Patched node-ninja MSVSVersion.py for Visual Studio 2022');
+          '@
+          node -e $script
       - name: Patch prebuild for node-ninja
         shell: pwsh
         run: |
