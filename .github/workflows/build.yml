@@ -117,5 +117,9 @@ jobs:
           merge-multiple: true
       - run: ls -lh release-assets
       - env:
-          GH_TOKEN: ${{ github.token }}
+          # Prefer a user PAT for fork/release uploads; fall back to the workflow token when no secret is configured.
+          GH_TOKEN: ${{ secrets.RELEASE_UPLOAD_TOKEN || github.token }}
+          # The upload job only downloads artifacts; it does not check out the repository.
+          # Tell gh which repository to target so it does not try to inspect a local .git directory.
+          GH_REPO: ${{ github.repository }}
         run: gh release upload "${{ github.event.release.tag_name }}" release-assets/*.tar.gz --clobber
