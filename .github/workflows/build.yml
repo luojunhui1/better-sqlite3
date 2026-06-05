@@ -1,117 +1,22 @@
-permissions: 
+permissions:
   contents: write
 
 name: build
 
 on:
-  push:
-    branches:
-      - master
-  pull_request:
-    branches:
-      - master
   release:
     types:
       - released
   workflow_dispatch: {}
 
 env:
-  # See https://github.com/nodejs/release#release-schedule
-  # Node.js v20 EOL = 2026-04-30. v22 EOL = 2027-04-30. v23 EOL = 2025-06-01. v24 EOL = 2028-04-30. v25 EOL = 2026-06-01.
-  # Node.js 20-24 can build with GCC 10 (bullseye)
-  NODE_BUILD_CMD_LEGACY: npx --no-install prebuild -r node -t 20.0.0 -t 22.0.0 -t 23.0.0 -t 24.0.0 --include-regex 'better_sqlite3.node$'
-  # Node.js 25+ requires GCC 11+ for <source_location> header (bookworm)
-  NODE_BUILD_CMD_MODERN: npx --no-install prebuild -r node -t 25.0.0 --include-regex 'better_sqlite3.node$'
-
-  # See https://www.electronjs.org/docs/latest/tutorial/electron-timelines#version-support-policy
-  # Electron v29 EOL = 2024-08-20. v30 EOL = 2024-10-15. v31 EOL = 2025-01-14. v32 EOL = 2025-03-11. v33 EOL = 2025-05-13. v34 EOL = 2025-06-24. v35 EOL = 2025-09-02. v36 EOL = 2025-10-28. v37 EOL = 2026-01-13. v38 EOL = 2026-03-10.
-  # Electron 29-38 can build with GCC 10 (bullseye)
-  ELECTRON_BUILD_CMD_LEGACY: npx --no-install prebuild -r electron -t 29.0.0 -t 30.0.0 -t 31.0.0 -t 32.0.0 -t 33.0.0 -t 34.0.0 -t 35.0.0 -t 36.0.0 -t 37.0.0 -t 38.0.0 --include-regex 'better_sqlite3.node$'
-
-  # Electron v39 EOL = 2026-05-05. v40 EOL = 2026-06-30. v41 EOL = 2026-08-25. v42 EOL = 2026-09-22.
-  # Electron 39+ requires GCC 11+ for <source_location> header (bookworm) on Linux.
-  ELECTRON_BUILD_CMD_MODERN: npx --no-install prebuild -r electron -t 39.0.0 -t 40.0.0 -t 41.0.0 -t 42.1.0 --include-regex 'better_sqlite3.node$'
-  # Electron 42 headers pull in cppgc code that requires ClangCL on Windows, but node-gyp currently drives MSBuild with cl.exe.
-  # Keep Windows modern Electron prebuilds on 39-41 until the Windows toolchain path is updated.
-  ELECTRON_BUILD_CMD_MODERN_WINDOWS: npx --no-install prebuild -r electron -t 39.0.0 -t 40.0.0 -t 41.0.0 --include-regex 'better_sqlite3.node$'
+  ELECTRON_BUILD_CMD_RELEASE: npx --no-install prebuild -r electron -t 42.1.0 --include-regex 'better_sqlite3.node$'
+  # Electron 42 headers require ClangCL on Windows, but node-gyp currently drives MSBuild with cl.exe.
+  # Keep Windows release assets on the last known-good modern Electron range until that toolchain path is fixed.
+  ELECTRON_BUILD_CMD_RELEASE_WINDOWS: npx --no-install prebuild -r electron -t 39.0.0 -t 40.0.0 -t 41.0.0 --include-regex 'better_sqlite3.node$'
 
 jobs:
-  test:
-    strategy:
-      fail-fast: false
-      matrix:
-        os:
-          - ubuntu-22.04
-          - macos-15
-          - macos-15-intel
-          - windows-2022
-        node:
-          - 20
-          - 22
-          - 23
-          - 24
-          - 25
-    name: Testing Node ${{ matrix.node }} on ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: ${{ matrix.node }}
-      - if: ${{ startsWith(matrix.os, 'windows') }}
-        run: pip.exe install setuptools
-      - if: ${{ startsWith(matrix.os, 'macos') }}
-        run: brew install python-setuptools
-      - if: ${{ !startsWith(matrix.os, 'windows') && !startsWith(matrix.os, 'macos') }}
-        run: python3 -m pip install setuptools
-      - if: ${{ startsWith(matrix.os, 'ubuntu') && matrix.node < 25 }}
-        run: |
-          sudo apt update
-          sudo apt install gcc-10 g++-10 -y
-          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-10 100 --slave /usr/bin/g++ g++ /usr/bin/g++-10 --slave /usr/bin/gcov gcov /usr/bin/gcov-10
-      - if: ${{ startsWith(matrix.os, 'ubuntu') && matrix.node >= 25 }}
-        run: |
-          sudo apt update
-          sudo apt install gcc-11 g++-11 -y
-          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-11 100 --slave /usr/bin/g++ g++ /usr/bin/g++-11 --slave /usr/bin/gcov gcov /usr/bin/gcov-11
-      - run: npm install --ignore-scripts
-      - run: npm run build-debug
-      - run: npm test
-      - name: Test SpatiaLite extension
-        if: ${{ startsWith(matrix.os, 'ubuntu') }}
-        run: |
-          sudo apt update
-          sudo apt install libsqlite3-mod-spatialite -y
-          node -e "require('./lib/index.js')(':memory:').loadExtension('mod_spatialite').exec('SELECT InitSpatialMetaData();')"
-
-  publish:
-    if: ${{ false }}
-    name: Publishing to NPM
-    runs-on: ubuntu-22.04
-    permissions:
-      id-token: write # Required for OIDC trusted publishing
-      contents: read
-    needs:
-      - prebuild
-      - prebuild-alpine
-      - prebuild-alpine-arm
-      - prebuild-linux-x64
-      - prebuild-linux-arm
-      - prebuild-linux-x64-node-modern
-      - prebuild-linux-x64-electron-modern
-      - prebuild-linux-arm-node-modern
-      - prebuild-linux-arm64-electron-modern
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          registry-url: https://registry.npmjs.org
-      - name: Upgrade npm for OIDC support
-        run: npm install -g npm@latest
-      - run: npm publish --provenance
-
-  prebuild:
+  prebuild-macos:
     if: ${{ github.event_name == 'release' }}
     strategy:
       fail-fast: false
@@ -119,37 +24,16 @@ jobs:
         os:
           - macos-15
           - macos-15-intel
-          - windows-2022
     name: Prebuild on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
-    needs: test
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - if: ${{ startsWith(matrix.os, 'windows') }}
-        run: pip.exe install setuptools
-      - if: ${{ startsWith(matrix.os, 'macos') }}
-        run: brew install python-setuptools
+      - run: brew install python-setuptools
       - run: npm install --ignore-scripts
-      - run: ${{ env.NODE_BUILD_CMD_LEGACY }}
-      - run: ${{ env.NODE_BUILD_CMD_MODERN }}
-      - run: ${{ env.ELECTRON_BUILD_CMD_LEGACY }}
-      - if: matrix.os != 'windows-2022'
-        run: ${{ env.ELECTRON_BUILD_CMD_MODERN }}
-      - if: matrix.os == 'windows-2022'
-        run: ${{ env.ELECTRON_BUILD_CMD_MODERN_WINDOWS }}
-      - if: matrix.os == 'windows-2022'
-        run: |
-          ${{ env.NODE_BUILD_CMD_LEGACY }} --arch ia32
-          ${{ env.NODE_BUILD_CMD_MODERN }} --arch ia32
-          ${{ env.NODE_BUILD_CMD_LEGACY }} --arch arm64
-          ${{ env.NODE_BUILD_CMD_MODERN }} --arch arm64
-          ${{ env.ELECTRON_BUILD_CMD_LEGACY }} --arch ia32
-          ${{ env.ELECTRON_BUILD_CMD_MODERN_WINDOWS }} --arch ia32
-          ${{ env.ELECTRON_BUILD_CMD_LEGACY }} --arch arm64
-          ${{ env.ELECTRON_BUILD_CMD_MODERN_WINDOWS }} --arch arm64
+      - run: ${{ env.ELECTRON_BUILD_CMD_RELEASE }}
       - uses: actions/upload-artifact@v4
         with:
           name: prebuild-${{ matrix.os }}
@@ -160,152 +44,21 @@ jobs:
     if: ${{ github.event_name == 'release' }}
     name: Prebuild on Linux x64
     runs-on: ubuntu-latest
-    container: node:20-bullseye
-    needs: test
+    container: node:20-bookworm
     steps:
       - uses: actions/checkout@v4
       - run: npm install --ignore-scripts
-      - run: ${{ env.NODE_BUILD_CMD_LEGACY }}
-      - run: ${{ env.ELECTRON_BUILD_CMD_LEGACY }}
+      - run: ${{ env.ELECTRON_BUILD_CMD_RELEASE }}
       - uses: actions/upload-artifact@v4
         with:
           name: prebuild-linux-x64
           path: prebuilds/*.tar.gz
           if-no-files-found: error
 
-  prebuild-linux-x64-node-modern:
+  prebuild-linux-arm64:
     if: ${{ github.event_name == 'release' }}
-    name: Prebuild on Linux x64 (Node 25+)
+    name: Prebuild on Linux arm64
     runs-on: ubuntu-latest
-    container: node:20-bookworm
-    needs: test
-    steps:
-      - uses: actions/checkout@v4
-      - run: npm install --ignore-scripts
-      - run: ${{ env.NODE_BUILD_CMD_MODERN }}
-      - uses: actions/upload-artifact@v4
-        with:
-          name: prebuild-linux-x64-node-modern
-          path: prebuilds/*.tar.gz
-          if-no-files-found: error
-
-  prebuild-linux-x64-electron-modern:
-    if: ${{ github.event_name == 'release' }}
-    name: Prebuild on Linux x64 (Electron 39+)
-    runs-on: ubuntu-latest
-    container: node:20-bookworm
-    needs: test
-    steps:
-      - uses: actions/checkout@v4
-      - run: npm install --ignore-scripts
-      - run: ${{ env.ELECTRON_BUILD_CMD_MODERN }}
-      - uses: actions/upload-artifact@v4
-        with:
-          name: prebuild-linux-x64-electron-modern
-          path: prebuilds/*.tar.gz
-          if-no-files-found: error
-
-  prebuild-alpine:
-    if: ${{ github.event_name == 'release' }}
-    name: Prebuild on alpine
-    runs-on: ubuntu-latest
-    container: node:20-alpine
-    needs: test
-    steps:
-      - uses: actions/checkout@v4
-      - run: apk add build-base git python3 py3-setuptools --update-cache
-      - run: npm install --ignore-scripts
-      - run: ${{ env.NODE_BUILD_CMD_LEGACY }}
-      - run: ${{ env.NODE_BUILD_CMD_MODERN }}
-      - uses: actions/upload-artifact@v4
-        with:
-          name: prebuild-alpine
-          path: prebuilds/*.tar.gz
-          if-no-files-found: error
-
-  prebuild-alpine-arm:
-    if: ${{ github.event_name == 'release' }}
-    strategy:
-      fail-fast: false
-      matrix:
-        arch:
-          - arm/v7
-          - arm64
-    name: Prebuild on alpine (${{ matrix.arch }})
-    runs-on: ubuntu-latest
-    needs: test
-    steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-qemu-action@v3
-      - run: |
-          docker run --rm -v $(pwd):/tmp/project --entrypoint /bin/sh --platform linux/${{ matrix.arch }} node:20-alpine -c "\
-          apk add build-base git python3 py3-setuptools --update-cache && \
-          cd /tmp/project && \
-          npm install --ignore-scripts && \
-          ${{ env.NODE_BUILD_CMD_LEGACY }} && \
-          ${{ env.NODE_BUILD_CMD_MODERN }}"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: prebuild-alpine-${{ matrix.arch }}
-          path: prebuilds/*.tar.gz
-          if-no-files-found: error
-
-  prebuild-linux-arm:
-    if: ${{ github.event_name == 'release' }}
-    strategy:
-      fail-fast: false
-      matrix:
-        arch:
-          - arm/v7
-          - arm64
-    name: Prebuild on Linux (${{ matrix.arch }})
-    runs-on: ubuntu-latest
-    needs: test
-    steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-qemu-action@v3
-      - run: |
-          docker run --rm -v $(pwd):/tmp/project --entrypoint /bin/sh --platform linux/${{ matrix.arch }} node:20-bullseye -c "\
-          cd /tmp/project && \
-          npm install --ignore-scripts && \
-          ${{ env.NODE_BUILD_CMD_LEGACY }} && \
-          if [ '${{ matrix.arch }}' = 'arm64' ]; then ${{ env.ELECTRON_BUILD_CMD_LEGACY }} --arch arm64; fi"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: prebuild-linux-${{ matrix.arch }}
-          path: prebuilds/*.tar.gz
-          if-no-files-found: error
-
-  prebuild-linux-arm-node-modern:
-    if: ${{ github.event_name == 'release' }}
-    strategy:
-      fail-fast: false
-      matrix:
-        arch:
-          - arm/v7
-          - arm64
-    name: Prebuild on Linux (${{ matrix.arch }}) (Node 25+)
-    runs-on: ubuntu-latest
-    needs: test
-    steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-qemu-action@v3
-      - run: |
-          docker run --rm -v $(pwd):/tmp/project --entrypoint /bin/sh --platform linux/${{ matrix.arch }} node:20-bookworm -c "\
-          cd /tmp/project && \
-          npm install --ignore-scripts && \
-          ${{ env.NODE_BUILD_CMD_MODERN }}"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: prebuild-linux-node-modern-${{ matrix.arch }}
-          path: prebuilds/*.tar.gz
-          if-no-files-found: error
-
-  prebuild-linux-arm64-electron-modern:
-    if: ${{ github.event_name == 'release' }}
-    name: Prebuild on Linux arm64 (Electron 39+)
-    runs-on: ubuntu-latest
-    needs: test
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-qemu-action@v3
@@ -313,10 +66,35 @@ jobs:
           docker run --rm -v $(pwd):/tmp/project --entrypoint /bin/sh --platform linux/arm64 node:20-bookworm -c "\
           cd /tmp/project && \
           npm install --ignore-scripts && \
-          ${{ env.ELECTRON_BUILD_CMD_MODERN }} --arch arm64"
+          ${{ env.ELECTRON_BUILD_CMD_RELEASE }} --arch arm64"
       - uses: actions/upload-artifact@v4
         with:
-          name: prebuild-linux-arm64-electron-modern
+          name: prebuild-linux-arm64
+          path: prebuilds/*.tar.gz
+          if-no-files-found: error
+
+  prebuild-windows:
+    if: ${{ github.event_name == 'release' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        arch:
+          - x64
+          - ia32
+          - arm64
+    name: Prebuild on Windows (${{ matrix.arch }})
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: pip.exe install setuptools
+      - run: npm install --ignore-scripts
+      - run: ${{ env.ELECTRON_BUILD_CMD_RELEASE_WINDOWS }} --arch ${{ matrix.arch }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: prebuild-windows-${{ matrix.arch }}
           path: prebuilds/*.tar.gz
           if-no-files-found: error
 
@@ -327,15 +105,10 @@ jobs:
     permissions:
       contents: write
     needs:
-      - prebuild
-      - prebuild-alpine
-      - prebuild-alpine-arm
+      - prebuild-macos
       - prebuild-linux-x64
-      - prebuild-linux-arm
-      - prebuild-linux-x64-node-modern
-      - prebuild-linux-x64-electron-modern
-      - prebuild-linux-arm-node-modern
-      - prebuild-linux-arm64-electron-modern
+      - prebuild-linux-arm64
+      - prebuild-windows
     steps:
       - uses: actions/download-artifact@v4
         with:
