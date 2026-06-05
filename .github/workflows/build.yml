@@ -32,7 +32,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
       - uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: ${{ matrix.msvc_arch }}
@@ -60,40 +60,36 @@ jobs:
           const fs = require('fs');
           const path = 'node_modules/prebuild/gyp.js';
           const source = fs.readFileSync(path, 'utf8');
-          const before = `    gyp.commands[command.name](command.args).then(function () {
-              log.verbose('ok')
-              process.nextTick(runStep)
-            }, function (err) {
-              log.error(command.name + ' error')
-              log.error('stack', err.stack)
-              log.error('not ok')
-              return cb(err)
-            })`;
-          const after = `    var result
-            if (gyp.commands[command.name].length >= 2) {
-              result = new Promise(function (resolve, reject) {
-                gyp.commands[command.name](command.args, function (err) {
-                  if (err) return reject(err)
-                  resolve()
-                })
-              })
-            } else {
-              result = gyp.commands[command.name](command.args)
-            }
-
-            result.then(function () {
-              log.verbose('ok')
-              process.nextTick(runStep)
-            }, function (err) {
-              log.error(command.name + ' error')
-              log.error('stack', err.stack)
-              log.error('not ok')
-              return cb(err)
-            })`;
-          if (!source.includes(before)) {
-            throw new Error('Expected prebuild gyp.js snippet not found');
+          const pattern = /(\s*)gyp\.commands\[command\.name\]\(command\.args\)\.then\(function \(\) \{\s*\n\s*log\.verbose\('ok'\)\s*\n\s*process\.nextTick\(runStep\)\s*\n\s*\}, function \(err\) \{\s*\n\s*log\.error\(command\.name \+ ' error'\)\s*\n\s*log\.error\('stack', err\.stack\)\s*\n\s*log\.error\('not ok'\)\s*\n\s*return cb\(err\)\s*\n\s*\}\)/m;
+          if (!pattern.test(source)) {
+            throw new Error('Expected prebuild gyp.js pattern not found');
           }
-          fs.writeFileSync(path, source.replace(before, after));
+          const replacement = [
+            '$1var result',
+            '$1if (gyp.commands[command.name].length >= 2) {',
+            '$1  result = new Promise(function (resolve, reject) {',
+            '$1    gyp.commands[command.name](command.args, function (err) {',
+            '$1      if (err) return reject(err)',
+            '$1      resolve()',
+            '$1    })',
+            '$1  })',
+            '$1} else {',
+            '$1  result = gyp.commands[command.name](command.args)',
+            '$1}',
+            '$1',
+            '$1result.then(function () {',
+            '$1  log.verbose(\'ok\')',
+            '$1  process.nextTick(runStep)',
+            '$1}, function (err) {',
+            '$1  log.error(command.name + \' error\')',
+            '$1  log.error(\'stack\', err.stack)',
+            '$1  log.error(\'not ok\')',
+            '$1  return cb(err)',
+            '$1})'
+          ].join('\n');
+          const replaced = source.replace(pattern, replacement);
+          fs.writeFileSync(path, replaced);
+          console.log('Patched prebuild/gyp.js for callback backends');
           '@
           node -e $script
       - name: Clean previous build outputs
