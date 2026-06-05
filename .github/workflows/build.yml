@@ -9,101 +9,13 @@ on:
       - released
 
 env:
-  ELECTRON_BUILD_CMD_RELEASE: npx --no-install prebuild -r electron -t 42.1.0 --include-regex 'better_sqlite3.node$'
-  # Keep the last known-good Windows release path for Electron 39/40/41 while
-  # separately probing the Electron 42 toolchain on Windows.
-  ELECTRON_BUILD_CMD_RELEASE_WINDOWS_STABLE: npx --no-install prebuild -r electron -t 39.0.0 -t 40.0.0 -t 41.0.0 --include-regex 'better_sqlite3.node$'
-  # Electron 42 pulls in Node 24 headers on Windows, which need a clang-cl based path.
-  # `node-ninja` can generate an MSBuild solution that delegates actual compilation to ninja.
-  ELECTRON_BUILD_CMD_RELEASE_WINDOWS_EXPERIMENTAL: npx --no-install prebuild -r electron -t 42.1.0 --backend node-ninja --format msvs-ninja --include-regex 'better_sqlite3.node$' --verbose
+  # Electron 42.1.0 maps to ABI v146. Build only the Windows release assets we care about.
+  # `node-ninja` generates an MSBuild solution that delegates compilation to ninja/clang-cl.
+  ELECTRON_BUILD_CMD_RELEASE_WINDOWS: npx --no-install prebuild -r electron -t 42.1.0 --backend node-ninja --format msvs-ninja --include-regex 'better_sqlite3.node$' --verbose
 
 jobs:
-  prebuild-macos:
-    if: ${{ github.event_name == 'release' }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os:
-          - macos-15
-          - macos-15-intel
-    name: Prebuild on ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-      - run: brew install python-setuptools
-      - run: npm install --ignore-scripts
-      - run: ${{ env.ELECTRON_BUILD_CMD_RELEASE }}
-      - uses: actions/upload-artifact@v4
-        with:
-          name: prebuild-${{ matrix.os }}
-          path: prebuilds/*.tar.gz
-          if-no-files-found: error
-
-  prebuild-linux-x64:
-    if: ${{ github.event_name == 'release' }}
-    name: Prebuild on Linux x64
-    runs-on: ubuntu-latest
-    container: node:20-bookworm
-    steps:
-      - uses: actions/checkout@v4
-      - run: npm install --ignore-scripts
-      - run: ${{ env.ELECTRON_BUILD_CMD_RELEASE }}
-      - uses: actions/upload-artifact@v4
-        with:
-          name: prebuild-linux-x64
-          path: prebuilds/*.tar.gz
-          if-no-files-found: error
-
-  prebuild-linux-arm64:
-    if: ${{ github.event_name == 'release' }}
-    name: Prebuild on Linux arm64
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-qemu-action@v3
-      - run: |
-          docker run --rm -v $(pwd):/tmp/project --entrypoint /bin/sh --platform linux/arm64 node:20-bookworm -c "\
-          cd /tmp/project && \
-          npm install --ignore-scripts && \
-          ${{ env.ELECTRON_BUILD_CMD_RELEASE }} --arch arm64"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: prebuild-linux-arm64
-          path: prebuilds/*.tar.gz
-          if-no-files-found: error
-
   prebuild-windows:
     if: ${{ github.event_name == 'release' }}
-    strategy:
-      fail-fast: false
-      matrix:
-        arch:
-          - x64
-          - ia32
-          - arm64
-    name: Prebuild on Windows (${{ matrix.arch }})
-    runs-on: windows-2022
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-      - run: pip.exe install setuptools
-      - run: npm install --ignore-scripts
-      - run: ${{ env.ELECTRON_BUILD_CMD_RELEASE_WINDOWS_STABLE }} --arch ${{ matrix.arch }}
-      - uses: actions/upload-artifact@v4
-        with:
-          name: prebuild-windows-${{ matrix.arch }}
-          path: prebuilds/*.tar.gz
-          if-no-files-found: error
-
-  prebuild-windows-electron42:
-    if: ${{ github.event_name == 'release' }}
-    # Keep release publishing unblocked until the Electron 42 Windows path is verified in CI.
-    continue-on-error: ${{ github.event_name == 'release' }}
     strategy:
       fail-fast: false
       matrix:
@@ -164,8 +76,7 @@ jobs:
           } else {
             Write-Host "ninja was not found on PATH."
           }
-      - name: Attempt Electron 42 prebuild
-        continue-on-error: true
+      - name: Build Windows Electron 42 prebuild
         shell: pwsh
         env:
           CC: clang-cl
@@ -174,7 +85,7 @@ jobs:
           CXX_target: clang-cl
           npm_config_msvs_version: 2022
         run: |
-          ${{ env.ELECTRON_BUILD_CMD_RELEASE_WINDOWS_EXPERIMENTAL }} --arch ${{ matrix.arch }}
+          ${{ env.ELECTRON_BUILD_CMD_RELEASE_WINDOWS }} --arch ${{ matrix.arch }}
       - name: List produced prebuilds
         if: always()
         shell: pwsh
@@ -184,55 +95,34 @@ jobs:
           } else {
             Write-Host "No prebuilds directory was produced."
           }
-      - name: Inspect Windows Electron 42 outputs
-        if: always()
-        id: inspect_windows_electron42
-        shell: pwsh
-        run: |
-          $hasPrebuilds = [bool](Get-ChildItem prebuilds -Filter *.tar.gz -File -ErrorAction SilentlyContinue)
-          $hasBuildOutputs = Test-Path build
-          "has_prebuilds=$($hasPrebuilds.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
-          "has_build_outputs=$($hasBuildOutputs.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
       - uses: actions/upload-artifact@v4
-        if: ${{ steps.inspect_windows_electron42.outputs.has_prebuilds == 'true' }}
         with:
-          name: prebuild-windows-electron42-${{ matrix.arch }}
+          name: prebuild-windows-${{ matrix.arch }}
           path: prebuilds/*.tar.gz
           if-no-files-found: error
       - uses: actions/upload-artifact@v4
-        if: ${{ always() && steps.inspect_windows_electron42.outputs.has_build_outputs == 'true' }}
+        if: ${{ always() }}
         with:
-          name: diagnostics-windows-electron42-${{ matrix.arch }}
+          name: diagnostics-windows-${{ matrix.arch }}
           path: build/**/*
-          if-no-files-found: error
-      - name: Record missing Electron 42 Windows assets
-        if: ${{ steps.inspect_windows_electron42.outputs.has_prebuilds != 'true' }}
-        shell: pwsh
-        run: Write-Host "Electron 42 Windows prebuilds were not produced on this run."
+          if-no-files-found: ignore
   upload-release-assets:
     if: >-
       ${{
         github.event_name == 'release' &&
         always() &&
-        needs.prebuild-macos.result == 'success' &&
-        needs.prebuild-linux-x64.result == 'success' &&
-        needs.prebuild-linux-arm64.result == 'success' &&
         needs.prebuild-windows.result == 'success'
       }}
-    name: Upload release assets
+    name: Upload Windows v146 release assets
     runs-on: ubuntu-latest
     permissions:
       contents: write
     needs:
-      - prebuild-macos
-      - prebuild-linux-x64
-      - prebuild-linux-arm64
       - prebuild-windows
-      - prebuild-windows-electron42
     steps:
       - uses: actions/download-artifact@v4
         with:
-          pattern: prebuild-*
+          pattern: prebuild-windows-*
           path: release-assets
           merge-multiple: true
       - run: ls -lh release-assets
