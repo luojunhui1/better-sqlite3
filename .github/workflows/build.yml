@@ -132,7 +132,19 @@ jobs:
               "{\n  'variables': {\n    'standalone_static_library%': 1,\n  },\n  'target_defaults': {"
             );
           }
+          addonGypi = addonGypi.replace(
+            "      ['_win_delay_load_hook==\"true\"', {",
+            "      ['_win_delay_load_hook==\"true\" and _type==\"loadable_module\"', {"
+          );
           fs.writeFileSync(addonGypiPath, addonGypi);
+
+          const delayHookPath = 'node_modules/node-ninja/src/win_delay_load_hook.c';
+          let delayHook = fs.readFileSync(delayHookPath, 'utf8');
+          delayHook = delayHook.replace(
+            'PfnDliHook __pfnDliNotifyHook2 = load_exe_hook;',
+            'const PfnDliHook __pfnDliNotifyHook2 = load_exe_hook;'
+          );
+          fs.writeFileSync(delayHookPath, delayHook);
 
           const buildJsPath = 'node_modules/node-ninja/lib/build.js';
           let buildJs = fs.readFileSync(buildJsPath, 'utf8');
@@ -145,7 +157,7 @@ jobs:
           }
           fs.writeFileSync(buildJsPath, buildJs);
 
-          console.log('Patched node-ninja for Visual Studio 2022, standalone_static_library, and msbuild args');
+          console.log('Patched node-ninja for Visual Studio 2022, delay-load hook, standalone_static_library, and msbuild args');
           '@
           node -e $script
       - name: Patch prebuild for node-ninja
