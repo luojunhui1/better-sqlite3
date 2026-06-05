@@ -28,9 +28,12 @@ env:
   # Electron 29-38 can build with GCC 10 (bullseye)
   ELECTRON_BUILD_CMD_LEGACY: npx --no-install prebuild -r electron -t 29.0.0 -t 30.0.0 -t 31.0.0 -t 32.0.0 -t 33.0.0 -t 34.0.0 -t 35.0.0 -t 36.0.0 -t 37.0.0 -t 38.0.0 --include-regex 'better_sqlite3.node$'
 
-  # Electron v39 EOL = 2026-05-05. v40 EOL = 2026-06-30. v41 EOL = 2026-08-25.
-  # Electron 39+ requires GCC 11+ for <source_location> header (bookworm).
+  # Electron v39 EOL = 2026-05-05. v40 EOL = 2026-06-30. v41 EOL = 2026-08-25. v42 EOL = 2026-09-22.
+  # Electron 39+ requires GCC 11+ for <source_location> header (bookworm) on Linux.
   ELECTRON_BUILD_CMD_MODERN: npx --no-install prebuild -r electron -t 39.0.0 -t 40.0.0 -t 41.0.0 -t 42.1.0 --include-regex 'better_sqlite3.node$'
+  # Electron 42 headers pull in cppgc code that requires ClangCL on Windows, but node-gyp currently drives MSBuild with cl.exe.
+  # Keep Windows modern Electron prebuilds on 39-41 until the Windows toolchain path is updated.
+  ELECTRON_BUILD_CMD_MODERN_WINDOWS: npx --no-install prebuild -r electron -t 39.0.0 -t 40.0.0 -t 41.0.0 --include-regex 'better_sqlite3.node$'
 
 jobs:
   test:
@@ -133,7 +136,10 @@ jobs:
       - run: ${{ env.NODE_BUILD_CMD_LEGACY }}
       - run: ${{ env.NODE_BUILD_CMD_MODERN }}
       - run: ${{ env.ELECTRON_BUILD_CMD_LEGACY }}
-      - run: ${{ env.ELECTRON_BUILD_CMD_MODERN }}
+      - if: matrix.os != 'windows-2022'
+        run: ${{ env.ELECTRON_BUILD_CMD_MODERN }}
+      - if: matrix.os == 'windows-2022'
+        run: ${{ env.ELECTRON_BUILD_CMD_MODERN_WINDOWS }}
       - if: matrix.os == 'windows-2022'
         run: |
           ${{ env.NODE_BUILD_CMD_LEGACY }} --arch ia32
@@ -141,9 +147,9 @@ jobs:
           ${{ env.NODE_BUILD_CMD_LEGACY }} --arch arm64
           ${{ env.NODE_BUILD_CMD_MODERN }} --arch arm64
           ${{ env.ELECTRON_BUILD_CMD_LEGACY }} --arch ia32
-          ${{ env.ELECTRON_BUILD_CMD_MODERN }} --arch ia32
+          ${{ env.ELECTRON_BUILD_CMD_MODERN_WINDOWS }} --arch ia32
           ${{ env.ELECTRON_BUILD_CMD_LEGACY }} --arch arm64
-          ${{ env.ELECTRON_BUILD_CMD_MODERN }} --arch arm64
+          ${{ env.ELECTRON_BUILD_CMD_MODERN_WINDOWS }} --arch arm64
       - uses: actions/upload-artifact@v4
         with:
           name: prebuild-${{ matrix.os }}
