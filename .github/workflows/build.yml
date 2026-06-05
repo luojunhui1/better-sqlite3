@@ -86,8 +86,8 @@ jobs:
         run: |
           $script = @'
           const fs = require('fs');
-          const path = 'node_modules/node-ninja/gyp/pylib/gyp/MSVSVersion.py';
-          let source = fs.readFileSync(path, 'utf8');
+          const msvsVersionPath = 'node_modules/node-ninja/gyp/pylib/gyp/MSVSVersion.py';
+          let source = fs.readFileSync(msvsVersionPath, 'utf8');
 
           if (!source.includes("'2022': VisualStudioVersion('2022'")) {
             source = source.replace(
@@ -122,8 +122,19 @@ jobs:
             );
           }
 
-          fs.writeFileSync(path, source);
-          console.log('Patched node-ninja MSVSVersion.py for Visual Studio 2022');
+          fs.writeFileSync(msvsVersionPath, source);
+
+          const addonGypiPath = 'node_modules/node-ninja/addon.gypi';
+          let addonGypi = fs.readFileSync(addonGypiPath, 'utf8');
+          if (!addonGypi.includes("'standalone_static_library%': 1")) {
+            addonGypi = addonGypi.replace(
+              "{\n  'target_defaults': {",
+              "{\n  'variables': {\n    'standalone_static_library%': 1,\n  },\n  'target_defaults': {"
+            );
+          }
+          fs.writeFileSync(addonGypiPath, addonGypi);
+
+          console.log('Patched node-ninja for Visual Studio 2022 and standalone_static_library');
           '@
           node -e $script
       - name: Patch prebuild for node-ninja
