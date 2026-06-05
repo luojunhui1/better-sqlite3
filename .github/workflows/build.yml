@@ -41,6 +41,7 @@ jobs:
         run: |
           $python = (Get-Command python).Source
           "npm_config_msvs_version=2022" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "npm_config_node_with_ltcg=false" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "GYP_MSVS_VERSION=2022" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "PYTHON=$python" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "npm_config_python=$python" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
@@ -111,11 +112,13 @@ jobs:
           npm --version
           python --version
           node -p "require('./node_modules/node-gyp/package.json').version"
+          Write-Host "node_with_ltcg=$env:npm_config_node_with_ltcg"
           clang-cl --version
       - name: Build Windows Electron 42 prebuild
         shell: pwsh
         env:
           npm_config_msvs_version: 2022
+          npm_config_node_with_ltcg: false
         run: |
           ${{ env.ELECTRON_BUILD_CMD_RELEASE_WINDOWS }} --arch ${{ matrix.arch }}
       - name: List produced prebuilds
